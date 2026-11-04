@@ -60,7 +60,7 @@ npm run test:int      # integration tests against the real feature_voting_test d
 npm run typecheck && npm run lint && npm run build
 ```
 
-- **58 tests**, focused on the business rules and how they fail, not on coverage numbers.
+- **68 tests**, focused on the business rules and how they fail, not on coverage numbers.
 - **Integration tests run against a real Postgres.** The test database is separate, migrated once per
   run, and truncated before each test.
 - **No HTTP server needed.** Route handlers are called directly with a constructed `NextRequest`,
@@ -73,6 +73,7 @@ npm run typecheck && npm run lint && npm run build
 | Voting | One vote per user; repeated PUT/DELETE are no-ops; 25 parallel voters → count 25; 15 parallel PUTs from one user → 1 vote; interleaved vote/unvote → `vote_count = COUNT(*)`; 404 / 409 (merged) |
 | Status | 401 anonymous, 403 user (even the author, even calling the service directly); history row per change; same-status no-op; concurrent admins produce a consistent from→to chain |
 | Auth | Session cookie flags; same 401 for wrong password vs unknown email; expired and forged sessions rejected; logout revokes server-side; demoted admin loses access immediately; CSRF Origin check; no self-registration as admin |
+| Comments | 401 anonymous; trimmed and length-checked; 20 parallel comments → count 20; official response admin-only (403 for users, nothing saved); public thread oldest first; 404 / 409 (merged) |
 | Requests | Server-side validation; author auto-vote in the same transaction; status/author can't be injected; search (wildcards escaped), filter, sort with stable tiebreak, paging; merged duplicates hidden |
 | UI | Vote button: optimistic update, rollback with alert, DELETE on unvote, merged redirect, logged-out login link |
 
@@ -93,8 +94,8 @@ lock made the concurrent-admins test fail 3 out of 3 runs.
 | Vote / remove vote, counts | ✅ Complete | Idempotent, concurrency-safe, optimistic UI |
 | Progress via status model | ✅ Complete | Status badge and public progress timeline |
 | Admin: review and change status | ✅ Complete | Review queue link, status control, history |
-| Comments, comment counts | ⏳ Partial | Schema, counters and UI counts exist; no endpoint or UI to post yet |
-| Official admin response | ⏳ Partial | Modelled as `comments.kind = 'official'`; blocked on comments |
+| Comments, comment counts | ✅ Complete | Thread on the detail page; counter updated in the same transaction |
+| Official admin response | ✅ Complete | Admin-only `kind = 'official'` comment, pinned under the title; keeps history |
 | Merge duplicates | ⏳ Partial | Designed and backed by schema and locking (tombstones, redirects, 409s already work); merge operation not built. Full design: [docs/05-decisions.md § D6](docs/05-decisions.md) |
 | Edit own request | ❌ Deferred | Ownership policy planned (`author_id = user.id` or admin) |
 | Usage statistics | ❌ Deferred | Plain SQL aggregates over `requests`, `votes` and `status_changes` |
@@ -113,12 +114,14 @@ only hides what you can't do.
 | Concurrent votes must not produce incorrect totals | One transaction: `SELECT … FOR UPDATE` on the request, then `vote_count = vote_count + 1` **only if a row was inserted**. The DB does the arithmetic; the app never reads the count, adds one and writes it back | `services/votes.ts` |
 | Repeated API requests must not create duplicate votes | Votes are state, not a toggle: `PUT /vote` = "voted", `DELETE /vote` = "not voted". Retries are no-ops, and the unique constraint backs it up | `api/requests/[id]/vote/route.ts` |
 | Only administrators may change status | `requireAdmin` in the route **and** `assertAdmin` in the service. Role is read from the DB on every request | `services/status.ts`, `auth/policies.ts` |
+| Only administrators may post official responses (implied by the brief's admin role) | `assertAdmin` in the service when `official: true`. A non-admin gets 403, not a silent downgrade | `services/comments.ts` |
 | Merging must preserve votes and comments | Designed, not built: one transaction locks both rows in id order, moves comments, moves votes with `ON CONFLICT DO NOTHING` (dedupes overlapping voters), recomputes counts, leaves a tombstone | [D6](docs/05-decisions.md) |
 | A user cannot edit another user's request | Deferred, with editing | — |
 
 **Transactions**
 - **Create request** inserts the request and the author's vote.
 - **Vote and unvote** lock the row, then change the vote row and the counter together.
+- **Comment** locks the row, then inserts the comment and adds 1 to `comment_count`.
 - **Status change** locks the row, then updates the status and inserts a history row.
 
 **Defence in depth in the schema**
@@ -185,8 +188,9 @@ More detail: [database design](docs/06-database-design.md) · [codebase guide](d
 ### Known limitations
 
 - **No rate limiting** on login or writes.
-- **No idempotency key on `POST /api/requests`.** The submit button is disabled while pending, but
-  a network-level retry could still create a duplicate request.
+- **No idempotency key on `POST /api/requests` or comments.** The submit buttons are disabled while
+  pending, but a network-level retry could still create a duplicate.
+- **Comments can't be edited or deleted yet.**
 - **Search is `ILIKE`.** Fine for thousands of rows; it does a sequential scan beyond that.
 - **Sessions have a fixed 7-day expiry.** No sliding renewal, and no cleanup job for expired rows
   (they're deleted when next used).
@@ -198,7 +202,6 @@ More detail: [database design](docs/06-database-design.md) · [codebase guide](d
 ### Next steps
 
 1. **Finish the slice:**
-   - comments plus official responses (schema is ready)
    - the merge transaction (designed in D6, with tests for deduped voters and moved comments)
    - edit own request (ownership policy)
    - usage stats
@@ -239,5 +242,5 @@ docs/               requirements, priorities, decisions, DB design, codebase gui
 
 ## Time spent
 
-About **3.5 hours of active work**, estimated from commit and file timestamps. Working sessions
+About **3.75 hours of active work**, estimated from commit and file timestamps. Working sessions
 were spread across one day with breaks. That includes the planning and design docs in `docs/`.

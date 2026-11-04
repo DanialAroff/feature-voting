@@ -1,7 +1,7 @@
 # 07 — Codebase Guide
 
 How the code is organised, how a request flows through it, and what every file does.
-This guide covers everything up to and including step 8 (admin status changes). Extend it as features land.
+This guide covers everything up to and including comments and official responses. Extend it as features land.
 
 ## 1. The layers
 
@@ -355,7 +355,37 @@ workflow. A strict state machine is a possible extension and is listed as deferr
 **Not optimistic, unlike voting.** A status change is rare, deliberate and public, so the control
 waits for the server. Then `router.refresh()` re-renders the badge and the timeline from the server.
 
-## 13. Commands
+## 13. Comments and official responses
+
+**Files**
+
+| File | Role |
+| --- | --- |
+| `lib/validation/comments.ts` | `createCommentSchema`: `body` (trimmed, 1–5000) and `official` (default false) |
+| `server/services/comments.ts` | `addComment` (transactional) and `listComments` (thread, oldest first) |
+| `app/api/requests/[id]/comments/route.ts` | `GET` (public) and `POST { body, official? }` → 201 `{ comment }` |
+| `components/comments/comment-thread.tsx` | `CommentThread` (list + form or login link) and `PinnedOfficialResponse` |
+| `components/comments/comment-form.tsx` | Client form; admins get a "Post as official response" checkbox |
+| `server/services/comments.int.test.ts` | Auth, validation, 404/409, parallel counting, official-response permissions |
+
+**An official response is just a comment with `kind = 'official'`** (decision D3). That means:
+- One table, one thread, one counter. A new official update doesn't erase the old one, so history is kept.
+- The detail page pins the **latest** official response under the title, and every official response also
+  appears in its place in the thread with an "Official response" badge.
+
+**Permission rule:** `official: true` from a non-admin is rejected with **403** and nothing is saved.
+Quietly saving it as a normal comment would hide the mistake from the client. The check lives in the service
+(`assertAdmin` when `official` is set). An admin posting without the checkbox gets a normal comment.
+
+**Same integrity pattern as votes:** one transaction locks the request row (404 if missing, 409 with
+`mergedIntoId` if merged), inserts the comment and runs `comment_count = comment_count + 1`. The parallel
+test (20 people at once) checks the stored count equals `COUNT(*)`.
+
+**UI flow:** not optimistic. On success the form resets, an `aria-live` message says "Comment posted", and
+`router.refresh()` re-renders the thread, the count and the pinned response from the server.
+`originRequestId` is already shown ("originally on #12"), ready for comments that merges move.
+
+## 14. Commands
 
 | Command | Does |
 | --- | --- |

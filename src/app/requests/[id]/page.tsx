@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { Suspense } from "react";
+import { CommentThread, PinnedOfficialResponse } from "@/components/comments/comment-thread";
 import { StatusBadge } from "@/components/requests/status-badge";
 import { StatusControl } from "@/components/requests/status-control";
 import { StatusTimeline } from "@/components/requests/status-timeline";
@@ -10,6 +11,7 @@ import { requestIdSchema } from "@/lib/validation/requests";
 import { getCurrentUser } from "@/server/auth/current-user";
 import { isAdmin } from "@/server/auth/policies";
 import { getRequest } from "@/server/services/requests";
+import { listComments } from "@/server/services/comments";
 import { getStatusHistory } from "@/server/services/status";
 
 export default function RequestPage({ params }: PageProps<"/requests/[id]">) {
@@ -30,9 +32,10 @@ async function RequestDetail({ params }: { params: Promise<{ id: string }> }) {
   if (!parsed.success) notFound();
 
   const viewer = await getCurrentUser();
-  const [request, history] = await Promise.all([
+  const [request, history, comments] = await Promise.all([
     getRequest(parsed.data, viewer?.id ?? null),
     getStatusHistory(parsed.data),
+    listComments(parsed.data),
   ]);
   if (!request) notFound();
   // Merged duplicates live on as tombstones; old links follow them to the target.
@@ -60,11 +63,13 @@ async function RequestDetail({ params }: { params: Promise<{ id: string }> }) {
           </div>
         </div>
       </header>
+      <PinnedOfficialResponse comments={comments} />
       {/* Hiding the control is UX only; the API enforces admin-only on its own. */}
       {isAdmin(viewer) && <StatusControl key={request.status} requestId={request.id} current={request.status} />}
       {/* Plain text: React escapes it, so user content can't inject HTML. */}
       <p className="whitespace-pre-wrap leading-relaxed">{request.description}</p>
       <StatusTimeline createdAt={request.createdAt} history={history} />
+      <CommentThread requestId={request.id} comments={comments} viewer={viewer && { isAdmin: isAdmin(viewer) }} />
     </article>
   );
 }
