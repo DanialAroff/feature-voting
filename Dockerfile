@@ -7,7 +7,10 @@ FROM node:24-alpine AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-RUN npm run build
+# Route modules are loaded during the build, and the DB module requires a URL.
+# postgres.js only connects on the first query and the build runs none, so a
+# placeholder is enough. The real URL is provided at runtime.
+RUN DATABASE_URL=postgres://build:build@localhost:5432/build npm run build
 
 FROM node:24-alpine AS runner
 WORKDIR /app

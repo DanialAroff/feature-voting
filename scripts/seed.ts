@@ -176,7 +176,7 @@ async function main() {
   });
 
   console.log(`Seeded ${people.length} users and ${seedRequests.length} requests.`);
-  console.log(`Log in as admin@example.com (or alice/bob/carol/dan@example.com) / ${DEMO_PASSWORD}`);
+  console.log(`Log in as admin@example.com (or alice/bob/carol/danial@example.com) / ${DEMO_PASSWORD}`);
 }
 
 main()

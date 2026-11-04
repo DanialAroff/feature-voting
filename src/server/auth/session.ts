@@ -51,7 +51,8 @@ export async function invalidateSession(token: string | undefined): Promise<void
 export function sessionCookieOptions(expiresAt: Date) {
   return {
     httpOnly: true, // not readable by JavaScript, so XSS can't steal it
-    secure: process.env.NODE_ENV === "production",
+    // HTTPS-only in production; COOKIE_SECURE=false allows plain-http local Docker runs.
+    secure: process.env.NODE_ENV === "production" && process.env.COOKIE_SECURE !== "false",
     sameSite: "lax" as const, // not sent on cross-site POST/PUT/DELETE
     path: "/",
     expires: expiresAt,

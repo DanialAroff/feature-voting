@@ -16,14 +16,32 @@ services:
       timeout: 5s
       retries: 10
 
+  # Production build of the app: docker compose --profile app up --build
   app:
     build: .
     profiles: ["app"]
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@db:5432/${POSTGRES_DB:-feature_voting}
       NODE_ENV: production
+      # Served over plain http://localhost here; behind HTTPS leave this unset.
+      COOKIE_SECURE: "false"
     ports:
-      - "3000:3000"
+      - "${APP_PORT:-3000}:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # One-off tasks without Node on the host, using the build stage (has dev tools):
+  #   docker compose run --rm tools                  → apply migrations
+  #   docker compose run --rm tools npm run db:seed  → load demo data
+  tools:
+    build:
+      context: .
+      target: build
+    profiles: ["tools"]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@db:5432/${POSTGRES_DB:-feature_voting}
+    command: ["npm", "run", "db:migrate"]
     depends_on:
       db:
         condition: service_healthy
