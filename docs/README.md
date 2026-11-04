@@ -23,6 +23,7 @@ duplicates, respond officially, and see stats.
 | [03-integrity-rules.md](03-integrity-rules.md) | Each business rule → how it is enforced → how it is tested |
 | [04-submission-checklist.md](04-submission-checklist.md) | Deliverables, handoff checks, evaluation weights, discussion prep |
 | [05-decisions.md](05-decisions.md) | Decision log: stack, auth, official response, auto-vote, vote API, merge design, Drizzle ORM (with rejected alternatives) |
+| [06-database-design.md](06-database-design.md) | Database design choices with pros, cons and alternatives |
 
 ## Evaluation weights (drive every prioritization call)
 
