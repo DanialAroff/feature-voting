@@ -1,5 +1,5 @@
 // Every API error leaves the server in one shape:
-//   { "error": { "code": "FORBIDDEN", "message": "...", "fields"?: { name: ["..."] } } }
+//   { "error": { "code": "FORBIDDEN", "message": "...", "fields"?: { name: ["..."] }, "details"?: {...} } }
 export type ErrorCode =
   | "VALIDATION_ERROR"
   | "INVALID_JSON"
@@ -15,6 +15,7 @@ export class AppError extends Error {
     readonly code: ErrorCode,
     message: string,
     readonly fields?: Record<string, string[]>,
+    readonly details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "AppError";
@@ -31,3 +32,7 @@ export const notFound = (message = "Not found") => new AppError(404, "NOT_FOUND"
 
 export const conflict = (message: string, fields?: Record<string, string[]>) =>
   new AppError(409, "CONFLICT", message, fields);
+
+/** The request is a merged tombstone; `mergedIntoId` lets clients follow it. */
+export const mergedConflict = (mergedIntoId: number) =>
+  new AppError(409, "CONFLICT", `This request was merged into #${mergedIntoId}`, undefined, { mergedIntoId });

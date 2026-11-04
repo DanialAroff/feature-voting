@@ -4,6 +4,7 @@ import { listQuerySchema, type ListQuery } from "@/lib/validation/requests";
 import { getCurrentUser } from "@/server/auth/current-user";
 import { listRequests, type RequestSummary } from "@/server/services/requests";
 import { StatusBadge } from "./status-badge";
+import { VoteButton } from "./vote-button";
 
 type SearchParams = Record<string, string | string[] | undefined>;
 
@@ -26,7 +27,7 @@ export async function RequestList({ searchParams }: { searchParams: Promise<Sear
       </p>
       <ul className="flex flex-col gap-3">
         {page.items.map((r) => (
-          <RequestRow key={r.id} request={r} />
+          <RequestRow key={r.id} request={r} canVote={!!viewer} />
         ))}
       </ul>
       {page.totalPages > 1 && <Pagination query={query} totalPages={page.totalPages} />}
@@ -34,13 +35,16 @@ export async function RequestList({ searchParams }: { searchParams: Promise<Sear
   );
 }
 
-function RequestRow({ request: r }: { request: RequestSummary }) {
+function RequestRow({ request: r, canVote }: { request: RequestSummary; canVote: boolean }) {
   return (
     <li className="flex gap-4 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
-      <div className="flex w-14 shrink-0 flex-col items-center justify-center rounded-md bg-zinc-50 py-2 dark:bg-zinc-900">
-        <span className="text-lg font-semibold">{r.voteCount}</span>
-        <span className="text-xs text-zinc-600 dark:text-zinc-400">{r.voteCount === 1 ? "vote" : "votes"}</span>
-      </div>
+      {/* key: re-seed local state whenever the server sends fresh numbers */}
+      <VoteButton
+        key={`${r.voteCount}-${r.hasVoted}`}
+        requestId={r.id}
+        initial={{ voted: r.hasVoted, voteCount: r.voteCount }}
+        canVote={canVote}
+      />
       <div className="flex min-w-0 flex-1 flex-col gap-1.5">
         <Link href={`/requests/${r.id}`} className="font-medium hover:underline">
           {r.title}
@@ -51,7 +55,6 @@ function RequestRow({ request: r }: { request: RequestSummary }) {
           <span>
             by {r.author.displayName} · <time dateTime={new Date(r.createdAt).toISOString()}>{formatDate(r.createdAt)}</time>
           </span>
-          {r.hasVoted && <span className="text-blue-700 dark:text-blue-400">You voted</span>}
         </div>
       </div>
     </li>

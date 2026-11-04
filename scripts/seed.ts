@@ -21,11 +21,11 @@ const db = drizzle(client, { schema, casing: "snake_case" });
 // Demo-only credentials, documented in the README.
 const DEMO_PASSWORD = "password123";
 const people = [
-  { key: "admin", email: "admin@example.com", displayName: "Ada Admin", role: "admin" },
+  { key: "admin", email: "admin@example.com", displayName: "Admin", role: "admin" },
   { key: "alice", email: "alice@example.com", displayName: "Alice", role: "user" },
   { key: "bob", email: "bob@example.com", displayName: "Bob", role: "user" },
   { key: "carol", email: "carol@example.com", displayName: "Carol", role: "user" },
-  { key: "dan", email: "dan@example.com", displayName: "Dan", role: "user" },
+  { key: "dan", email: "danial@example.com", displayName: "Danial", role: "user" },
 ] as const;
 type Person = (typeof people)[number]["key"];
 

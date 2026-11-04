@@ -1,7 +1,7 @@
 # 07 — Codebase Guide
 
 How the code is organised, how a request flows through it, and what every file does.
-This guide covers everything up to and including step 6 (requests). Extend it as features land.
+This guide covers everything up to and including step 7 (voting). Extend it as features land.
 
 ## 1. The layers
 
@@ -273,7 +273,52 @@ Deferred: rate limiting on login, sliding session renewal, expired-session clean
 **Known limitation.** A missing request's *page* returns HTTP 200 with the not-found UI (plus
 `noindex`). The static shell streams before the DB lookup runs. The *API* returns a real 404.
 
-## 11. Commands
+## 11. Voting (step 7)
+
+**Files**
+
+| File | Role |
+| --- | --- |
+| `server/services/votes.ts` | `castVote` (PUT) and `removeVote` (DELETE): the integrity-critical code |
+| `app/api/requests/[id]/vote/route.ts` | `PUT` and `DELETE` → `{ voted, voteCount }` |
+| `components/requests/vote-button.tsx` | Optimistic toggle used in the list and on the detail page |
+| `server/services/votes.int.test.ts` | Idempotency and concurrency tests against real Postgres |
+| `components/requests/vote-button.test.tsx` | Optimistic update, rollback, DELETE, merged redirect, logged-out link |
+
+**One vote, step by step** (`castVote`, all in one transaction):
+1. `SELECT … FROM requests WHERE id = $1 FOR UPDATE` locks the request row:
+   - Votes on the same request queue here.
+   - A concurrent merge (which locks the same row) either finishes first, so we see the tombstone and
+     return 409, or waits for us, so our vote gets moved with the rest.
+   - A missing row gives 404.
+2. `INSERT INTO votes … ON CONFLICT (request_id, user_id) DO NOTHING RETURNING id`. If a row comes
+   back, this is a new vote. If not, the user had already voted, so it's a no-op.
+3. Only for a new vote: `UPDATE requests SET vote_count = vote_count + 1`. The database does the
+   arithmetic; the app never reads the count, adds one and writes it back.
+
+`removeVote` mirrors it with `DELETE … RETURNING` and `- 1`. Removing a vote that doesn't exist is a no-op.
+
+**Proof the tests are meaningful.** I temporarily broke `castVote` the classic way: no row lock,
+and the count updated as read, then `+ 1` in app code. The concurrency test then failed with
+**`{ stored: 3, actual: 25 }`**: 25 simultaneous voters, but 22 updates lost. With the real code it's
+`{ stored: 25, actual: 25 }`. Every vote test checks that `vote_count` equals `COUNT(*)` of the vote rows.
+
+**Optimistic UI** (`VoteButton`):
+- **On click:** the button flips instantly (`onMutate`), sending the *desired* state (PUT or DELETE).
+- **On success:** shows the server's `{ voted, voteCount }`, which includes other people's votes.
+- **On error:** rolls back to the last state the server confirmed and shows an inline `role="alert"` message.
+  A 409 for a merged request navigates to the target instead.
+- **Rapid clicks:** each click gets a sequence number, and only the latest response updates the UI, so a
+  slow older response can't overwrite a newer click. PUT and DELETE are idempotent, so the server
+  ends up in the state of the last click.
+- **`key={voteCount-hasVoted}`** re-seeds the local state when the server sends fresh numbers.
+- **Accessibility:** `aria-pressed` gives the on/off state, and `aria-label` says "Remove your vote (4 votes)".
+- **Logged out:** the button is a link to `/login?next=<this page>`.
+
+**API errors now carry `details`.** For example, a 409 on a merged request returns
+`error.details.mergedIntoId`, and the client follows it.
+
+## 12. Commands
 
 | Command | Does |
 | --- | --- |

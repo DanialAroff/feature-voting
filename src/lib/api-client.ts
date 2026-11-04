@@ -6,6 +6,7 @@ export class ApiError extends Error {
     readonly code: string,
     message: string,
     readonly fields: Record<string, string[] | undefined> = {},
+    readonly details: Record<string, unknown> = {},
   ) {
     super(message);
     this.name = "ApiError";
@@ -31,7 +32,7 @@ export async function api<T>(path: string, method: Method = "GET", body?: unknow
   const data = await res.json().catch(() => null);
   if (!res.ok) {
     const e = data?.error;
-    throw new ApiError(res.status, e?.code ?? "INTERNAL", e?.message ?? "Something went wrong", e?.fields);
+    throw new ApiError(res.status, e?.code ?? "INTERNAL", e?.message ?? "Something went wrong", e?.fields, e?.details);
   }
   return data as T;
 }

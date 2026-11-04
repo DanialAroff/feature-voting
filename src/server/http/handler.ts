@@ -33,7 +33,7 @@ export async function parseJson<S extends z.ZodType>(req: NextRequest, schema: S
 export function errorResponse(err: unknown): Response {
   if (err instanceof AppError) {
     return Response.json(
-      { error: { code: err.code, message: err.message, fields: err.fields } },
+      { error: { code: err.code, message: err.message, fields: err.fields, details: err.details } },
       { status: err.status },
     );
   }
