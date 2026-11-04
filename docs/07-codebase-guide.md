@@ -1,7 +1,7 @@
 # 07 — Codebase Guide
 
 How the code is organised, how a request flows through it, and what every file does.
-This guide covers everything up to and including merging duplicates. Extend it as features land.
+This guide covers everything up to and including editing your own request. Extend it as features land.
 
 ## 1. The layers
 
@@ -429,7 +429,32 @@ got 200 is on the target. Removing the vote lock makes it fail every time.
 2. **Confirm** merges, then navigates to the target with `?mergedFrom=<id>`, which shows a banner.
 3. Any old link to the duplicate redirects the same way.
 
-## 15. Commands
+## 15. Editing your own request
+
+**Files**
+
+| File | Role |
+| --- | --- |
+| `server/auth/policies.ts` | `canEditRequest` (for showing the link) and `assertCanEditRequest` (throws 401/403) |
+| `server/services/requests.ts` | `updateRequest`: lock row → 404 → ownership check → 409 if merged → update |
+| `lib/validation/requests.ts` | `updateRequestSchema`: `title` and/or `description`; at least one |
+| `app/api/requests/[id]/route.ts` | `PATCH` → 200 `{ request }` |
+| `components/requests/request-form.tsx` | One form for create (`POST`) and edit (`PATCH`); replaces `new-request-form.tsx` |
+| `app/requests/[id]/edit/page.tsx` | Edit page: login redirect, "You can only edit your own requests" for others |
+
+**The rule:** the author or an admin may edit. Admins can moderate, e.g. to fix a typo or remove personal
+data. Everyone else gets 403, and the row is untouched (a test checks this).
+
+**Why the check is inside the transaction.** `updateRequest` locks the row, *then* reads `author_id` and
+checks it, then writes. The decision and the write use the same locked data, so nothing can change in between.
+
+**Only title and description are editable.** The Zod schema only knows those two fields, and unknown keys are
+dropped, so `{ status: "released", authorId: 5, voteCount: 999 }` in the body is ignored. A test checks this.
+
+**Not added (yet):** locking edits once a request is Planned, and an "edited" marker. `updated_at` also changes on
+status changes and merges, so it can't tell an edit apart; that would need a separate `edited_at` column.
+
+## 16. Commands
 
 | Command | Does |
 | --- | --- |

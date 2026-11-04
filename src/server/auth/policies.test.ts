@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, test } from "vitest";
 import { AppError } from "@/server/http/errors";
-import { assertAdmin, assertAuthenticated } from "./policies";
+import { assertAdmin, assertAuthenticated, assertCanEditRequest } from "./policies";
 import type { PublicUser } from "./types";
 
 const user: PublicUser = { id: 1, email: "u@test.local", displayName: "U", role: "user" };
@@ -29,5 +29,14 @@ describe("authorization policies", () => {
 
   test("admins pass", () => {
     expect(assertAdmin(admin)).toBe(admin);
+  });
+});
+
+describe("editing requests", () => {
+  test("the author and admins may edit; other users may not", () => {
+    expect(assertCanEditRequest(user, user.id)).toBe(user);
+    expect(assertCanEditRequest(admin, user.id)).toBe(admin);
+    expect(statusOf(() => assertCanEditRequest({ ...user, id: 99 }, user.id))).toBe(403);
+    expect(statusOf(() => assertCanEditRequest(null, user.id))).toBe(401);
   });
 });

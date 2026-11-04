@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
-import { NewRequestForm } from "@/components/requests/new-request-form";
+import { RequestForm } from "@/components/requests/request-form";
 import { getCurrentUser } from "@/server/auth/current-user";
 
 export const metadata: Metadata = { title: "New request · Feature Requests" };
@@ -20,5 +20,5 @@ export default function NewRequestPage() {
 // UX convenience only: the API enforces login on POST regardless.
 async function RequireLogin() {
   if (!(await getCurrentUser())) redirect("/login?next=/requests/new");
-  return <NewRequestForm />;
+  return <RequestForm mode="create" />;
 }

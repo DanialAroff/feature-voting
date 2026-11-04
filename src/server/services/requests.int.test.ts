@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, test } from "vitest";
-import { GET as getOne } from "@/app/api/requests/[id]/route";
+import { GET as getOne, PATCH as patch } from "@/app/api/requests/[id]/route";
 import { GET as list, POST as create } from "@/app/api/requests/route";
 import { db } from "@/server/db";
 import { votes } from "@/server/db/schema";
@@ -154,5 +154,75 @@ describe("GET /api/requests/:id", () => {
     const dup = await insertRequest(author.id, { mergedIntoId: target.id });
     const { request } = await (await getOne(makeRequest(`/api/requests/${dup.id}`), idCtx(dup.id))).json();
     expect(request.mergedIntoId).toBe(target.id);
+  });
+});
+
+describe("PATCH /api/requests/:id (a user cannot edit another user's request)", () => {
+  const edit = (id: number | string, body: unknown, cookie?: string) =>
+    patch(makeRequest(`/api/requests/${id}`, { method: "PATCH", body, cookie }), idCtx(id));
+
+  async function current(id: number) {
+    const { request } = await (await getOne(makeRequest(`/api/requests/${id}`), idCtx(id))).json();
+    return request;
+  }
+
+  test("the author can edit their own request", async () => {
+    const { user, cookie } = await loginAs();
+    const r = await insertRequest(user.id, { title: "Old title", description: "Old text" });
+    const res = await edit(r.id, { title: "New title", description: "New text" }, cookie);
+    expect(res.status).toBe(200);
+    expect((await res.json()).request).toMatchObject({ title: "New title", description: "New text" });
+  });
+
+  test("another user gets 403 and nothing changes", async () => {
+    const author = await createUser();
+    const other = await loginAs();
+    const r = await insertRequest(author.id, { title: "Original" });
+    const res = await edit(r.id, { title: "Hijacked" }, other.cookie);
+    expect(res.status).toBe(403);
+    expect((await current(r.id)).title).toBe("Original");
+  });
+
+  test("anonymous gets 401", async () => {
+    const r = await insertRequest((await createUser()).id);
+    expect((await edit(r.id, { title: "Nope nope" })).status).toBe(401);
+  });
+
+  test("an admin can edit any request (moderation)", async () => {
+    const admin = await loginAs("admin");
+    const r = await insertRequest((await createUser()).id, { title: "Typo titel" });
+    expect((await edit(r.id, { title: "Typo title" }, admin.cookie)).status).toBe(200);
+  });
+
+  test("partial updates keep the other field", async () => {
+    const { user, cookie } = await loginAs();
+    const r = await insertRequest(user.id, { title: "Keep me", description: "Old text" });
+    await edit(r.id, { description: "New text" }, cookie);
+    expect(await current(r.id)).toMatchObject({ title: "Keep me", description: "New text" });
+  });
+
+  test("status, author and counts can't be changed through an edit", async () => {
+    const { user, cookie } = await loginAs();
+    const other = await createUser();
+    const r = await insertRequest(user.id, { voteCount: 0 });
+    await edit(r.id, { title: "Fine title", status: "released", authorId: other.id, voteCount: 999 }, cookie);
+    expect(await current(r.id)).toMatchObject({ status: "under_review", author: { id: user.id }, voteCount: 0 });
+  });
+
+  test("validates input: empty body, too-short title", async () => {
+    const { user, cookie } = await loginAs();
+    const r = await insertRequest(user.id);
+    expect((await edit(r.id, {}, cookie)).status).toBe(400);
+    const short = await edit(r.id, { title: "x" }, cookie);
+    expect(short.status).toBe(400);
+    expect((await short.json()).error.fields.title).toBeDefined();
+  });
+
+  test("404 for unknown requests, 409 for merged ones", async () => {
+    const { user, cookie } = await loginAs();
+    const target = await insertRequest(user.id);
+    const dup = await insertRequest(user.id, { mergedIntoId: target.id });
+    expect((await edit(999, { title: "Whatever" }, cookie)).status).toBe(404);
+    expect((await edit(dup.id, { title: "Whatever" }, cookie)).status).toBe(409);
   });
 });

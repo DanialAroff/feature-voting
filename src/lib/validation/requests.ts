@@ -16,6 +16,12 @@ export const createRequestSchema = z.object({
 });
 export type CreateRequestInput = z.infer<typeof createRequestSchema>;
 
+// Only title and description are editable; status and author are not, whatever the body says.
+export const updateRequestSchema = createRequestSchema
+  .partial()
+  .refine((v) => v.title !== undefined || v.description !== undefined, { message: "Nothing to update" });
+export type UpdateRequestInput = z.infer<typeof updateRequestSchema>;
+
 const first = (v: unknown) => (Array.isArray(v) ? v[0] : v);
 const sortKeys = Object.keys(SORT_OPTIONS) as [RequestSort, ...RequestSort[]];
 

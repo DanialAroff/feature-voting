@@ -16,3 +16,13 @@ export function assertAdmin(user: PublicUser | null): PublicUser {
 }
 
 export const isAdmin = (user: PublicUser | null) => user?.role === "admin";
+
+/** Business rule: a user cannot edit another user's request (admins can moderate any). */
+export const canEditRequest = (user: PublicUser | null, authorId: number) =>
+  !!user && (user.id === authorId || user.role === "admin");
+
+export function assertCanEditRequest(user: PublicUser | null, authorId: number): PublicUser {
+  const u = assertAuthenticated(user);
+  if (!canEditRequest(u, authorId)) throw forbidden("You can only edit your own requests");
+  return u;
+}

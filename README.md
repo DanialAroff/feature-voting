@@ -60,7 +60,7 @@ npm run test:int      # integration tests against the real feature_voting_test d
 npm run typecheck && npm run lint && npm run build
 ```
 
-- **80 tests**, focused on the business rules and how they fail, not on coverage numbers.
+- **89 tests**, focused on the business rules and how they fail, not on coverage numbers.
 - **Integration tests run against a real Postgres.** The test database is separate, migrated once per
   run, and truncated before each test.
 - **No HTTP server needed.** Route handlers are called directly with a constructed `NextRequest`,
@@ -76,6 +76,7 @@ npm run typecheck && npm run lint && npm run build
 | Merge | 401/403 (incl. direct service call); overlapping voters counted once; comments moved with origin; duplicate's wording kept as a system comment; audit row; tombstone hidden from list; earlier duplicates re-pointed; self/unknown/already-merged/into-tombstone rejected; repeat = safe no-op; votes during a merge are moved or refused, never lost; opposite merges at once → one 200, one 409, no deadlock |
 | Comments | 401 anonymous; trimmed and length-checked; 20 parallel comments → count 20; official response admin-only (403 for users, nothing saved); public thread oldest first; 404 / 409 (merged) |
 | Requests | Server-side validation; author auto-vote in the same transaction; status/author can't be injected; search (wildcards escaped), filter, sort with stable tiebreak, paging; merged duplicates hidden |
+| Editing | Author edits own (200); another user → 403 with nothing changed; anonymous → 401; admin can moderate; partial updates; status/author/counts not editable through the body; 400 / 404 / 409 (merged) |
 | UI | Vote button: optimistic update, rollback with alert, DELETE on unvote, merged redirect, logged-out login link |
 
 **The concurrency tests have been checked against broken code.** I deliberately broke the vote
@@ -103,7 +104,7 @@ service the classic way: no row lock, and the count updated as read, then +1 in 
 | Comments, comment counts | ✅ Complete | Thread on the detail page; counter updated in the same transaction |
 | Official admin response | ✅ Complete | Admin-only `kind = 'official'` comment, pinned under the title; keeps history |
 | Merge duplicates | ✅ Complete | Admin merge with preview and confirm; votes deduped, comments moved, duplicate's wording kept; tombstone redirects. Design: [D6](docs/05-decisions.md) |
-| Edit own request | ❌ Deferred | Ownership policy planned (`author_id = user.id` or admin) |
+| Edit own request | ✅ Complete | Title and description; author or admin only; Edit link shown only to them |
 | Usage statistics | ❌ Deferred | Plain SQL aggregates over `requests`, `votes` and `status_changes` |
 | Rate limiting, idempotency keys on create, real-time updates, notifications, caching, E2E tests, CI | ❌ Deferred | See [next steps](#next-steps) |
 
@@ -122,7 +123,7 @@ only hides what you can't do.
 | Only administrators may change status | `requireAdmin` in the route **and** `assertAdmin` in the service. Role is read from the DB on every request | `services/status.ts`, `auth/policies.ts` |
 | Only administrators may post official responses (implied by the brief's admin role) | `assertAdmin` in the service when `official: true`. A non-admin gets 403, not a silent downgrade | `services/comments.ts` |
 | Merging must preserve votes and comments | One admin-only transaction: locks both rows **in id order** (no deadlock between opposite merges); `INSERT … SELECT … ON CONFLICT DO NOTHING` moves votes, so overlapping voters count once; moves comments keeping `origin_request_id`; adds a system comment with the duplicate's text; recomputes counts from rows; leaves a redirecting tombstone; writes an audit row. Votes and comments lock the same row, so none can slip in mid-merge | `services/merge.ts`, [D6](docs/05-decisions.md) |
-| A user cannot edit another user's request | Deferred, with editing | — |
+| A user cannot edit another user's request | `assertCanEditRequest` (author or admin) runs **inside the transaction against the locked row**, so the check and the write see the same data. Only title and description are accepted; anything else in the body is ignored | `services/requests.ts`, `auth/policies.ts` |
 
 **Transactions**
 - **Create request** inserts the request and the author's vote.
@@ -212,8 +213,8 @@ More detail: [database design](docs/06-database-design.md) · [codebase guide](d
 ### Next steps
 
 1. **Finish the slice:**
-   - edit own request (ownership policy)
    - usage stats
+   - optionally lock editing once a request is Planned, so voters' intent isn't changed under them
 2. **Hardening:**
    - rate limiting (login, writes)
    - `Idempotency-Key` on create
@@ -252,4 +253,4 @@ docs/               requirements, priorities, decisions, DB design, codebase gui
 ## Time spent
 
 About **4 hours of active work**, estimated from commit and file timestamps. Working sessions
-were spread across one day with breaks. That includes the planning and design docs in `docs/`.
+were spread over two days with breaks. That includes the planning and design docs in `docs/`.

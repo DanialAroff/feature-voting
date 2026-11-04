@@ -10,7 +10,7 @@ import { VoteButton } from "@/components/requests/vote-button";
 import { formatDate, plural } from "@/lib/format";
 import { requestIdSchema } from "@/lib/validation/requests";
 import { getCurrentUser } from "@/server/auth/current-user";
-import { isAdmin } from "@/server/auth/policies";
+import { canEditRequest, isAdmin } from "@/server/auth/policies";
 import { listComments } from "@/server/services/comments";
 import { getMergedFrom } from "@/server/services/merge";
 import { getRequest } from "@/server/services/requests";
@@ -79,6 +79,11 @@ async function RequestDetail({ params, searchParams }: Props) {
               <time dateTime={new Date(request.createdAt).toISOString()}>{formatDate(request.createdAt)}</time>
             </span>
             <span>{plural(request.commentCount, "comment")}</span>
+            {canEditRequest(viewer, request.author.id) && (
+              <Link href={`/requests/${request.id}/edit`} className="text-blue-700 underline dark:text-blue-400">
+                Edit
+              </Link>
+            )}
           </div>
           {mergedFrom.length > 0 && (
             <p className="text-sm text-zinc-600 dark:text-zinc-400">

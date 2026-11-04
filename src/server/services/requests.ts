@@ -1,10 +1,12 @@
 import "server-only";
 import { and, count, desc, eq, ilike, isNull, or, sql, type SQL } from "drizzle-orm";
 import { PAGE_SIZE, type RequestSort } from "@/lib/requests";
-import type { CreateRequestInput, ListQuery } from "@/lib/validation/requests";
+import type { CreateRequestInput, ListQuery, UpdateRequestInput } from "@/lib/validation/requests";
+import { assertCanEditRequest } from "@/server/auth/policies";
 import type { PublicUser } from "@/server/auth/types";
 import { db } from "@/server/db";
 import { requests, users, votes, type RequestStatus } from "@/server/db/schema";
+import { mergedConflict, notFound } from "@/server/http/errors";
 
 export type RequestSummary = {
   id: number;
@@ -95,6 +97,30 @@ export async function getRequest(id: number, viewerId: number | null): Promise<R
     .innerJoin(users, eq(users.id, requests.authorId))
     .where(eq(requests.id, id));
   return row ?? null;
+}
+
+/**
+ * Edits title and/or description. The ownership check runs inside the
+ * transaction, against the row as locked, so the decision and the write use
+ * the same data.
+ */
+export async function updateRequest(user: PublicUser, id: number, input: UpdateRequestInput): Promise<RequestDetail> {
+  await db.transaction(async (tx) => {
+    const [row] = await tx
+      .select({ authorId: requests.authorId, mergedIntoId: requests.mergedIntoId })
+      .from(requests)
+      .where(eq(requests.id, id))
+      .for("update");
+    if (!row) throw notFound("Request not found");
+    assertCanEditRequest(user, row.authorId);
+    if (row.mergedIntoId) throw mergedConflict(row.mergedIntoId);
+
+    await tx
+      .update(requests)
+      .set({ title: input.title, description: input.description, updatedAt: new Date() })
+      .where(eq(requests.id, id));
+  });
+  return (await getRequest(id, user.id))!;
 }
 
 // Request + the author's own vote (D4) commit together or not at all.
