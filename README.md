@@ -60,7 +60,7 @@ npm run test:int      # integration tests against the real feature_voting_test d
 npm run typecheck && npm run lint && npm run build
 ```
 
-- **68 tests**, focused on the business rules and how they fail, not on coverage numbers.
+- **80 tests**, focused on the business rules and how they fail, not on coverage numbers.
 - **Integration tests run against a real Postgres.** The test database is separate, migrated once per
   run, and truncated before each test.
 - **No HTTP server needed.** Route handlers are called directly with a constructed `NextRequest`,
@@ -73,14 +73,20 @@ npm run typecheck && npm run lint && npm run build
 | Voting | One vote per user; repeated PUT/DELETE are no-ops; 25 parallel voters → count 25; 15 parallel PUTs from one user → 1 vote; interleaved vote/unvote → `vote_count = COUNT(*)`; 404 / 409 (merged) |
 | Status | 401 anonymous, 403 user (even the author, even calling the service directly); history row per change; same-status no-op; concurrent admins produce a consistent from→to chain |
 | Auth | Session cookie flags; same 401 for wrong password vs unknown email; expired and forged sessions rejected; logout revokes server-side; demoted admin loses access immediately; CSRF Origin check; no self-registration as admin |
+| Merge | 401/403 (incl. direct service call); overlapping voters counted once; comments moved with origin; duplicate's wording kept as a system comment; audit row; tombstone hidden from list; earlier duplicates re-pointed; self/unknown/already-merged/into-tombstone rejected; repeat = safe no-op; votes during a merge are moved or refused, never lost; opposite merges at once → one 200, one 409, no deadlock |
 | Comments | 401 anonymous; trimmed and length-checked; 20 parallel comments → count 20; official response admin-only (403 for users, nothing saved); public thread oldest first; 404 / 409 (merged) |
 | Requests | Server-side validation; author auto-vote in the same transaction; status/author can't be injected; search (wildcards escaped), filter, sort with stable tiebreak, paging; merged duplicates hidden |
 | UI | Vote button: optimistic update, rollback with alert, DELETE on unvote, merged redirect, logged-out login link |
 
 **The concurrency tests have been checked against broken code.** I deliberately broke the vote
 service the classic way: no row lock, and the count updated as read, then +1 in app code. The
-"25 parallel voters" test then failed with `{ stored: 3, actual: 25 }`. Removing the status-change
-lock made the concurrent-admins test fail 3 out of 3 runs.
+"25 parallel voters" test then failed with `{ stored: 3, actual: 25 }`. Similar results for the other locks:
+
+| Lock removed | What the test then caught |
+| --- | --- |
+| Status-change lock | Concurrent-admins test failed 3 out of 3 runs |
+| Merge's id-ordered locking (source then target instead) | `deadlock detected` |
+| Vote path's row lock | Merge race test failed 5 out of 5 runs: votes returned 200 but were stranded on the duplicate |
 
 ---
 
@@ -96,7 +102,7 @@ lock made the concurrent-admins test fail 3 out of 3 runs.
 | Admin: review and change status | ✅ Complete | Review queue link, status control, history |
 | Comments, comment counts | ✅ Complete | Thread on the detail page; counter updated in the same transaction |
 | Official admin response | ✅ Complete | Admin-only `kind = 'official'` comment, pinned under the title; keeps history |
-| Merge duplicates | ⏳ Partial | Designed and backed by schema and locking (tombstones, redirects, 409s already work); merge operation not built. Full design: [docs/05-decisions.md § D6](docs/05-decisions.md) |
+| Merge duplicates | ✅ Complete | Admin merge with preview and confirm; votes deduped, comments moved, duplicate's wording kept; tombstone redirects. Design: [D6](docs/05-decisions.md) |
 | Edit own request | ❌ Deferred | Ownership policy planned (`author_id = user.id` or admin) |
 | Usage statistics | ❌ Deferred | Plain SQL aggregates over `requests`, `votes` and `status_changes` |
 | Rate limiting, idempotency keys on create, real-time updates, notifications, caching, E2E tests, CI | ❌ Deferred | See [next steps](#next-steps) |
@@ -115,13 +121,14 @@ only hides what you can't do.
 | Repeated API requests must not create duplicate votes | Votes are state, not a toggle: `PUT /vote` = "voted", `DELETE /vote` = "not voted". Retries are no-ops, and the unique constraint backs it up | `api/requests/[id]/vote/route.ts` |
 | Only administrators may change status | `requireAdmin` in the route **and** `assertAdmin` in the service. Role is read from the DB on every request | `services/status.ts`, `auth/policies.ts` |
 | Only administrators may post official responses (implied by the brief's admin role) | `assertAdmin` in the service when `official: true`. A non-admin gets 403, not a silent downgrade | `services/comments.ts` |
-| Merging must preserve votes and comments | Designed, not built: one transaction locks both rows in id order, moves comments, moves votes with `ON CONFLICT DO NOTHING` (dedupes overlapping voters), recomputes counts, leaves a tombstone | [D6](docs/05-decisions.md) |
+| Merging must preserve votes and comments | One admin-only transaction: locks both rows **in id order** (no deadlock between opposite merges); `INSERT … SELECT … ON CONFLICT DO NOTHING` moves votes, so overlapping voters count once; moves comments keeping `origin_request_id`; adds a system comment with the duplicate's text; recomputes counts from rows; leaves a redirecting tombstone; writes an audit row. Votes and comments lock the same row, so none can slip in mid-merge | `services/merge.ts`, [D6](docs/05-decisions.md) |
 | A user cannot edit another user's request | Deferred, with editing | — |
 
 **Transactions**
 - **Create request** inserts the request and the author's vote.
 - **Vote and unvote** lock the row, then change the vote row and the counter together.
 - **Comment** locks the row, then inserts the comment and adds 1 to `comment_count`.
+- **Merge** locks both rows, then does everything in the merge row above, all or nothing.
 - **Status change** locks the row, then updates the status and inserts a history row.
 
 **Defence in depth in the schema**
@@ -191,6 +198,9 @@ More detail: [database design](docs/06-database-design.md) · [codebase guide](d
 - **No idempotency key on `POST /api/requests` or comments.** The submit buttons are disabled while
   pending, but a network-level retry could still create a duplicate.
 - **Comments can't be edited or deleted yet.**
+- **Merges can't be undone from the UI.** The audit row records counts but not the moved row IDs
+  that an un-merge would need. Admins also pick the target by number; there are no automatic
+  duplicate suggestions.
 - **Search is `ILIKE`.** Fine for thousands of rows; it does a sequential scan beyond that.
 - **Sessions have a fixed 7-day expiry.** No sliding renewal, and no cleanup job for expired rows
   (they're deleted when next used).
@@ -202,7 +212,6 @@ More detail: [database design](docs/06-database-design.md) · [codebase guide](d
 ### Next steps
 
 1. **Finish the slice:**
-   - the merge transaction (designed in D6, with tests for deduped voters and moved comments)
    - edit own request (ownership policy)
    - usage stats
 2. **Hardening:**
@@ -242,5 +251,5 @@ docs/               requirements, priorities, decisions, DB design, codebase gui
 
 ## Time spent
 
-About **3.75 hours of active work**, estimated from commit and file timestamps. Working sessions
+About **4 hours of active work**, estimated from commit and file timestamps. Working sessions
 were spread across one day with breaks. That includes the planning and design docs in `docs/`.

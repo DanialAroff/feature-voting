@@ -166,6 +166,15 @@ stays, and it leaves room for un-merge later.
 - A non-admin gets 403.
 - A vote racing a merge ends as either a moved vote or a 409, never a lost vote.
 
+**As implemented** (`src/server/services/merge.ts`), two additions to the design above:
+- **Repeating the same merge** (source already merged into *this* target) returns 200 with
+  `alreadyMerged: true` and changes nothing, so a retried request is safe. Merging it elsewhere is still 409.
+- **Requests previously merged into the source are re-pointed to the target**, so redirects are always one hop.
+
+The concurrency tests were checked against deliberately broken code:
+- Locking source-then-target instead of in id order gave `deadlock detected`.
+- Removing the vote path's row lock stranded votes on the tombstone (5 out of 5 runs).
+
 **Deferred (document).** Un-merge would need the moved vote and comment IDs recorded per merge
 and is out of timebox. Merge suggestions (similar-title detection) and notifying the source's
 voters are also deferred.

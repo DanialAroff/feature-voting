@@ -1,7 +1,7 @@
 # 07 — Codebase Guide
 
 How the code is organised, how a request flows through it, and what every file does.
-This guide covers everything up to and including comments and official responses. Extend it as features land.
+This guide covers everything up to and including merging duplicates. Extend it as features land.
 
 ## 1. The layers
 
@@ -385,7 +385,51 @@ test (20 people at once) checks the stored count equals `COUNT(*)`.
 `router.refresh()` re-renders the thread, the count and the pinned response from the server.
 `originRequestId` is already shown ("originally on #12"), ready for comments that merges move.
 
-## 14. Commands
+## 14. Merging duplicates
+
+**Files**
+
+| File | Role |
+| --- | --- |
+| `server/services/merge.ts` | `mergeRequests` (the transaction) and `getMergedFrom` (for "Merged from #N") |
+| `app/api/requests/[id]/merge/route.ts` | `POST { targetId }`. `:id` is the duplicate, `targetId` the request to keep |
+| `components/requests/merge-control.tsx` | Admin: enter a number, Preview, then Confirm (merging can't be undone) |
+| `app/requests/[id]/page.tsx` | "Merged from" line; banner after a redirect (`?mergedFrom=`); admin controls |
+| `components/comments/comment-thread.tsx` | System comments (the merge note) get a dashed "Merged" style |
+| `server/services/merge.int.test.ts` | 12 tests: authz, data preservation, invalid merges, races |
+
+**The transaction, in order** (all or nothing):
+1. **Lock both rows** with `SELECT … FOR UPDATE`, `ORDER BY id`.
+2. **Validate:**
+   - Source already merged into this target → return `alreadyMerged: true` (a safe retry).
+   - Source merged elsewhere, or the target is a tombstone → 409.
+   - Missing → 404. Self-merge → 409 (checked before the transaction).
+3. **Votes:** `INSERT INTO votes … SELECT … FROM votes WHERE request_id = source ON CONFLICT DO NOTHING
+   RETURNING id`, then delete the source's votes. The `RETURNING` rows are the voters who were *only* on the duplicate.
+4. **Comments:** `UPDATE comments SET request_id = target, origin_request_id = coalesce(origin_request_id, source)`.
+5. **A system comment** on the target keeps the duplicate's title and description.
+6. **Recompute the target's `vote_count` and `comment_count` from `COUNT(*)`.**
+7. **The source becomes a tombstone**: `merged_into_id = target`, counts 0. Anything previously merged into the
+   source is re-pointed to the target.
+8. **Audit row** in `request_merges`. Its `UNIQUE (source_id)` makes a double merge impossible in the DB.
+
+**Why the lock order matters.** Admin 1 merges A→B while admin 2 merges B→A. If each locked "its source
+first", one would hold A and wait for B while the other holds B and waits for A: a deadlock. Postgres would
+kill one with an error (a 500). Locking in id order means both try A first; one waits, then sees A or B is
+already a tombstone and gets a clean 409. The test confirms you get one 200 and one 409.
+
+**Why votes can't be lost mid-merge.** The vote and comment paths lock the same request row. A vote either
+commits *before* the merge locks the row, so the merge moves it, or waits until the merge commits, sees the
+tombstone and returns 409. The race test spreads 20 votes across the merge and checks that every vote that
+got 200 is on the target. Removing the vote lock makes it fail every time.
+
+**UI flow:**
+1. The admin enters the number of the request to keep and clicks **Preview**. This fetches the target and
+   shows its title, votes and status, and rejects a tombstone target with a hint.
+2. **Confirm** merges, then navigates to the target with `?mergedFrom=<id>`, which shows a banner.
+3. Any old link to the duplicate redirects the same way.
+
+## 15. Commands
 
 | Command | Does |
 | --- | --- |

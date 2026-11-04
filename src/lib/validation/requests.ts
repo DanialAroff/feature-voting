@@ -31,6 +31,11 @@ export type ListQuery = z.infer<typeof listQuerySchema>;
 
 export const requestIdSchema = z.coerce.number().int().positive();
 
+export const mergeRequestSchema = z.object({
+  targetId: z.coerce.number({ message: "Enter the number of the request to keep" }).int().positive("Enter a valid request number"),
+});
+export type MergeRequestInput = z.infer<typeof mergeRequestSchema>;
+
 export const updateStatusSchema = z.object({
   status: z.enum(REQUEST_STATUSES, { message: "Choose a valid status" }),
 });
