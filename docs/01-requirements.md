@@ -11,9 +11,11 @@ Priority tags (`P0`/`P1`/`P2`) are defined in [02-priorities.md](02-priorities.m
 | `Session` | id, user_id, token_hash, expires_at, created_at | DB-backed sessions (D2) |
 | `FeatureRequest` | id, title, description, status, author_id, merged_into_id (nullable), vote_count, comment_count, created_at, updated_at | `merged_into_id` marks a tombstone; counts are denormalized |
 | `Vote` | id, request_id, user_id, created_at | **UNIQUE (request_id, user_id)** |
-| `Comment` | id, request_id, author_id, body, is_official, origin_request_id (nullable), created_at | Official response = flagged comment (D3) |
+| `Comment` | id, request_id, author_id, kind (`user` \| `official` \| `system`), body, origin_request_id (nullable), created_at | Official response = comment with kind `official` (D3) |
 | `RequestMerge` | id, source_id, target_id, merged_by, merged_at, moved_vote_count, moved_comment_count | Merge audit + "merged from" list (D6) |
-| `StatusChange` / audit | id, request_id, actor_id, from_status, to_status, created_at | Cheap to add; powers "follow progress" timeline and stats |
+| `StatusChange` | id, request_id, actor_id, from_status, to_status, created_at | Cheap to add; powers "follow progress" timeline and stats |
+
+Schema source: `src/server/db/schema.ts`; generated SQL: `drizzle/0000_init.sql`.
 
 **Statuses (fixed enum):** `UNDER_REVIEW` (default) → `PLANNED` → `IN_PROGRESS` → `RELEASED`, plus `DECLINED`.
 
@@ -65,6 +67,6 @@ All decided — rationale and rejected alternatives in [05-decisions.md](05-deci
 
 1. **Stack:** Next.js (App Router, TypeScript) + Postgres, Drizzle ORM + drizzle-kit migrations, Zod, Vitest.
 2. **Auth:** server-side sessions in Postgres, opaque token in an httpOnly cookie (not JWT).
-3. **Official response:** flagged comment (`comments.is_official`, admin-only).
+3. **Official response:** comment with `kind = 'official'` (admin-only).
 4. **Author auto-vote:** yes, Reddit-style — a normal, removable vote row created in the same transaction as the request.
 5. **Merge:** source kept as a read-only tombstone pointing to the target; target lists "merged from #…"; votes moved with dedupe, comments moved with origin preserved.

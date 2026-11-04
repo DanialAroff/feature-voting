@@ -66,8 +66,10 @@ argon2id (or bcrypt).
 
 ## D3. Official response = flagged comment
 
-**Decision.** `comments.is_official boolean default false`. Only admins can create one
-(enforced in the service). The UI pins the latest official comment at the top of the detail page
+**Decision.** `comments.kind` enum: `user` (default), `official`, `system`. Only admins can
+create `official` (enforced in the service). `system` is generated, e.g. the merge note in D6.
+An enum rather than an `is_official` boolean so the merge's system comment doesn't need a
+second flag. The UI pins the latest official comment at the top of the detail page
 with a distinct style, and also shows it in its place in the thread.
 
 **Why.** One table and one endpoint. It keeps history (several official updates over time) and
