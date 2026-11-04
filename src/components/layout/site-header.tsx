@@ -36,6 +36,12 @@ async function UserMenu() {
   }
   return (
     <div className="flex items-center gap-3 text-sm">
+      {user.role === "admin" && (
+        // Newest requests awaiting triage.
+        <Link href="/?status=under_review&sort=new" className="font-medium hover:underline">
+          Review queue
+        </Link>
+      )}
       <span>
         {user.displayName}
         {user.role === "admin" && (

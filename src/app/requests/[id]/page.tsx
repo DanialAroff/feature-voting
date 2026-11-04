@@ -2,11 +2,15 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { Suspense } from "react";
 import { StatusBadge } from "@/components/requests/status-badge";
+import { StatusControl } from "@/components/requests/status-control";
+import { StatusTimeline } from "@/components/requests/status-timeline";
 import { VoteButton } from "@/components/requests/vote-button";
 import { formatDate, plural } from "@/lib/format";
 import { requestIdSchema } from "@/lib/validation/requests";
 import { getCurrentUser } from "@/server/auth/current-user";
+import { isAdmin } from "@/server/auth/policies";
 import { getRequest } from "@/server/services/requests";
+import { getStatusHistory } from "@/server/services/status";
 
 export default function RequestPage({ params }: PageProps<"/requests/[id]">) {
   return (
@@ -26,7 +30,10 @@ async function RequestDetail({ params }: { params: Promise<{ id: string }> }) {
   if (!parsed.success) notFound();
 
   const viewer = await getCurrentUser();
-  const request = await getRequest(parsed.data, viewer?.id ?? null);
+  const [request, history] = await Promise.all([
+    getRequest(parsed.data, viewer?.id ?? null),
+    getStatusHistory(parsed.data),
+  ]);
   if (!request) notFound();
   // Merged duplicates live on as tombstones; old links follow them to the target.
   if (request.mergedIntoId) redirect(`/requests/${request.mergedIntoId}`);
@@ -53,8 +60,11 @@ async function RequestDetail({ params }: { params: Promise<{ id: string }> }) {
           </div>
         </div>
       </header>
+      {/* Hiding the control is UX only; the API enforces admin-only on its own. */}
+      {isAdmin(viewer) && <StatusControl key={request.status} requestId={request.id} current={request.status} />}
       {/* Plain text: React escapes it, so user content can't inject HTML. */}
       <p className="whitespace-pre-wrap leading-relaxed">{request.description}</p>
+      <StatusTimeline createdAt={request.createdAt} history={history} />
     </article>
   );
 }

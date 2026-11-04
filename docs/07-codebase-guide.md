@@ -1,7 +1,7 @@
 # 07 — Codebase Guide
 
 How the code is organised, how a request flows through it, and what every file does.
-This guide covers everything up to and including step 7 (voting). Extend it as features land.
+This guide covers everything up to and including step 8 (admin status changes). Extend it as features land.
 
 ## 1. The layers
 
@@ -318,7 +318,44 @@ and the count updated as read, then `+ 1` in app code. The concurrency test then
 **API errors now carry `details`.** For example, a 409 on a merged request returns
 `error.details.mergedIntoId`, and the client follows it.
 
-## 12. Commands
+## 12. Admin status changes (step 8)
+
+**Files**
+
+| File | Role |
+| --- | --- |
+| `server/services/status.ts` | `changeStatus` (admin only, transactional) and `getStatusHistory` |
+| `app/api/requests/[id]/status/route.ts` | `PUT { status }` → `{ status, changed }` |
+| `components/requests/status-control.tsx` | Admin-only select + "Update status" on the detail page |
+| `components/requests/status-timeline.tsx` | Public "Progress" timeline from `status_changes` |
+| `components/layout/site-header.tsx` | Admins get a "Review queue" link (`/?status=under_review&sort=new`) |
+| `server/services/status.int.test.ts` | Authorization, history, no-op repeats, 400/404/409, concurrent admins |
+
+**Authorization is checked twice, on purpose.**
+1. The route starts with `requireAdmin(req)`: 401 when logged out, 403 for regular users (including the author).
+2. The service starts with `assertAdmin(actor)`, so even a future route, script or job that calls
+   `changeStatus` directly can't skip the rule. A test calls the service directly as a regular user
+   and expects 403.
+
+Hiding `StatusControl` from non-admins is only a convenience. The API is what enforces the rule.
+
+**One transaction:**
+1. `SELECT status … FOR UPDATE` locks the row. Unknown → 404; merged → 409 with `mergedIntoId`.
+2. If the new status equals the current one, return `{ changed: false }` with no history row. PUT stays idempotent.
+3. Otherwise `UPDATE requests SET status, updated_at` and `INSERT status_changes (from, to, actor)`.
+
+**Why the lock matters here.** Two admins change the same request at the same moment. Without the
+lock, both read "Under Review" and both record `from: under_review`, so the history contradicts itself.
+With it, the second waits and records the first one's result as its `from`. I confirmed the test fails
+without the lock (3 out of 3 runs) and passes with it.
+
+**Any transition is allowed** (e.g. reopening a Declined request). The brief defines statuses, not a
+workflow. A strict state machine is a possible extension and is listed as deferred.
+
+**Not optimistic, unlike voting.** A status change is rare, deliberate and public, so the control
+waits for the server. Then `router.refresh()` re-renders the badge and the timeline from the server.
+
+## 13. Commands
 
 | Command | Does |
 | --- | --- |

@@ -30,3 +30,8 @@ export const listQuerySchema = z.object({
 export type ListQuery = z.infer<typeof listQuerySchema>;
 
 export const requestIdSchema = z.coerce.number().int().positive();
+
+export const updateStatusSchema = z.object({
+  status: z.enum(REQUEST_STATUSES, { message: "Choose a valid status" }),
+});
+export type UpdateStatusInput = z.infer<typeof updateStatusSchema>;
