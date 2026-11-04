@@ -3,7 +3,7 @@ import { NextRequest } from "next/server";
 import { hashPassword } from "@/server/auth/password";
 import { createSession, SESSION_COOKIE } from "@/server/auth/session";
 import { db } from "@/server/db";
-import { users, type UserRole } from "@/server/db/schema";
+import { requests, users, type UserRole } from "@/server/db/schema";
 
 export async function resetDb() {
   await db.execute(sql`
@@ -36,6 +36,18 @@ export async function loginAs(role: UserRole = "user") {
   const user = await createUser({ role });
   const { token } = await createSession(user.id);
   return { user, cookie: `${SESSION_COOKIE}=${token}` };
+}
+
+/** Inserts a request row directly, for setting up list/sort scenarios. */
+export async function insertRequest(
+  authorId: number,
+  overrides: Partial<typeof requests.$inferInsert> = {},
+) {
+  const [row] = await db
+    .insert(requests)
+    .values({ title: "A request", description: "Details", authorId, ...overrides })
+    .returning();
+  return row;
 }
 
 type RequestOpts = { method?: string; body?: unknown; cookie?: string; headers?: Record<string, string> };

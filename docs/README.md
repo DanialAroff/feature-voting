@@ -24,6 +24,7 @@ duplicates, respond officially, and see stats.
 | [04-submission-checklist.md](04-submission-checklist.md) | Deliverables, handoff checks, evaluation weights, discussion prep |
 | [05-decisions.md](05-decisions.md) | Decision log: stack, auth, official response, auto-vote, vote API, merge design, Drizzle ORM (with rejected alternatives) |
 | [06-database-design.md](06-database-design.md) | Database design choices with pros, cons and alternatives |
+| [07-codebase-guide.md](07-codebase-guide.md) | How the code is organised, request flows, every file's role, how to add an endpoint |
 
 ## Evaluation weights (drive every prioritization call)
 
