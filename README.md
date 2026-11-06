@@ -44,7 +44,7 @@ All demo passwords are `password123`. These are local demo credentials only.
 
 | Email | Role |
 | --- | --- |
-| `admin@example.com` | Admin: status changes, review queue |
+| `admin@example.com` | Admin: status changes, merging, official responses, review queue, usage stats |
 | `alice@example.com`, `bob@example.com`, `carol@example.com`, `danial@example.com` | User |
 
 You can also register a new account at `/register`. Self-registration always creates a plain user.
@@ -60,7 +60,7 @@ npm run test:int      # integration tests against the real feature_voting_test d
 npm run typecheck && npm run lint && npm run build
 ```
 
-- **89 tests**, focused on the business rules and how they fail, not on coverage numbers.
+- **92 tests**, focused on the business rules and how they fail, not on coverage numbers.
 - **Integration tests run against a real Postgres.** The test database is separate, migrated once per
   run, and truncated before each test.
 - **No HTTP server needed.** Route handlers are called directly with a constructed `NextRequest`,
@@ -76,6 +76,7 @@ npm run typecheck && npm run lint && npm run build
 | Merge | 401/403 (incl. direct service call); overlapping voters counted once; comments moved with origin; duplicate's wording kept as a system comment; audit row; tombstone hidden from list; earlier duplicates re-pointed; self/unknown/already-merged/into-tombstone rejected; repeat = safe no-op; votes during a merge are moved or refused, never lost; opposite merges at once → one 200, one 409, no deadlock |
 | Comments | 401 anonymous; trimmed and length-checked; 20 parallel comments → count 20; official response admin-only (403 for users, nothing saved); public thread oldest first; 404 / 409 (merged) |
 | Requests | Server-side validation; author auto-vote in the same transaction; status/author can't be injected; search (wildcards escaped), filter, sort with stable tiebreak, paging; merged duplicates hidden |
+| Stats | Admin only (401/403, incl. direct service call); merged duplicates and merge notes excluded; 7-day window; top ordering; empty system returns zeros |
 | Editing | Author edits own (200); another user → 403 with nothing changed; anonymous → 401; admin can moderate; partial updates; status/author/counts not editable through the body; 400 / 404 / 409 (merged) |
 | UI | Vote button: optimistic update, rollback with alert, DELETE on unvote, merged redirect, logged-out login link |
 
@@ -105,7 +106,7 @@ service the classic way: no row lock, and the count updated as read, then +1 in 
 | Official admin response | ✅ Complete | Admin-only `kind = 'official'` comment, pinned under the title; keeps history |
 | Merge duplicates | ✅ Complete | Admin merge with preview and confirm; votes deduped, comments moved, duplicate's wording kept; tombstone redirects. Design: [D6](docs/05-decisions.md) |
 | Edit own request | ✅ Complete | Title and description; author or admin only; Edit link shown only to them |
-| Usage statistics | ❌ Deferred | Plain SQL aggregates over `requests`, `votes` and `status_changes` |
+| Usage statistics | ✅ Complete | Admin page `/admin/stats`: totals, last 7 days, requests by status, most-voted; one consistent DB snapshot |
 | Rate limiting, idempotency keys on create, real-time updates, notifications, caching, E2E tests, CI | ❌ Deferred | See [next steps](#next-steps) |
 
 ---
@@ -130,6 +131,8 @@ only hides what you can't do.
 - **Vote and unvote** lock the row, then change the vote row and the counter together.
 - **Comment** locks the row, then inserts the comment and adds 1 to `comment_count`.
 - **Merge** locks both rows, then does everything in the merge row above, all or nothing.
+- **Stats** read everything in one read-only `REPEATABLE READ` transaction, so all the numbers come
+  from the same snapshot, even while votes are coming in.
 - **Status change** locks the row, then updates the status and inserts a history row.
 
 **Defence in depth in the schema**
@@ -197,7 +200,8 @@ More detail: [database design](docs/06-database-design.md) · [codebase guide](d
 
 - **No rate limiting** on login or writes.
 - **No idempotency key on `POST /api/requests` or comments.** The submit buttons are disabled while
-  pending, but a network-level retry could still create a duplicate.
+  pending, but a network-level retry could still create a duplicate. The fix is designed in
+  [D8](docs/05-decisions.md): an `Idempotency-Key` header, with the server replaying the first response for repeats.
 - **Comments can't be edited or deleted yet.**
 - **Merges can't be undone from the UI.** The audit row records counts but not the moved row IDs
   that an un-merge would need. Admins also pick the target by number; there are no automatic
@@ -212,12 +216,12 @@ More detail: [database design](docs/06-database-design.md) · [codebase guide](d
 
 ### Next steps
 
-1. **Finish the slice:**
-   - usage stats
+1. **Product follow-ups:**
    - optionally lock editing once a request is Planned, so voters' intent isn't changed under them
+   - richer stats: trends over time, time from Under Review to Released (from `status_changes`), charts
 2. **Hardening:**
    - rate limiting (login, writes)
-   - `Idempotency-Key` on create
+   - `Idempotency-Key` on create request and comment ([D8](docs/05-decisions.md))
    - a session cleanup job
    - an audit log for admin actions
 3. **Delivery:**
@@ -252,5 +256,12 @@ docs/               requirements, priorities, decisions, DB design, codebase gui
 
 ## Time spent
 
-About **4 hours of active work**, estimated from commit and file timestamps. Working sessions
-were spread over two days with breaks. That includes the planning and design docs in `docs/`.
+About **4 h 15 min of active building time**:
+
+| Session | Work | Time |
+| --- | --- | --- |
+| 4 Nov (into the early hours of 5 Nov), several sittings | Planning docs, scaffold, schema, auth, requests, voting, status, README, comments, merge | ≈ 4 h (estimated from commit and file timestamps) |
+| 5 Nov, 07:03–07:10 | Edit own request | 7 min |
+| 6 Nov, 07:56–08:04 | Usage stats | 8 min |
+
+Separate study sessions spent going through the design decisions aren't counted. That includes the planning and design docs in `docs/`.

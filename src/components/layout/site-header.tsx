@@ -38,9 +38,14 @@ async function UserMenu() {
     <div className="flex items-center gap-3 text-sm">
       {user.role === "admin" && (
         // Newest requests awaiting triage.
-        <Link href="/?status=under_review&sort=new" className="font-medium hover:underline">
-          Review queue
-        </Link>
+        <>
+          <Link href="/?status=under_review&sort=new" className="font-medium hover:underline">
+            Review queue
+          </Link>
+          <Link href="/admin/stats" className="font-medium hover:underline">
+            Stats
+          </Link>
+        </>
       )}
       <span>
         {user.displayName}

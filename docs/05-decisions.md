@@ -218,3 +218,107 @@ migration files that are committed and applied with one command.
 **Trade-offs we accept.** Drizzle has a smaller ecosystem and fewer guides than Prisma, and
 relational queries are less magical, so some joins are written by hand. Both are acceptable
 for a small schema.
+
+---
+
+## D8. `Idempotency-Key` for POST endpoints (planned, not built yet)
+
+**Status:** deferred, and documented as a known gap in the README. This entry is the design to build when there's time.
+
+### The problem
+
+Most writes in this API are idempotent by design, so a repeated request is harmless:
+
+| Endpoint | Verb | Repeat-safe? |
+| --- | --- | --- |
+| Vote / unvote | PUT / DELETE | ✅ Desired state (D5) |
+| Change status | PUT | ✅ Same status → `changed: false`, no extra history |
+| Edit request | PATCH | ✅ Same values → same result |
+| Merge | POST | ✅ Repeating the same merge → `alreadyMerged: true` |
+| **Create request** | **POST** | ❌ Each call inserts a new row |
+| **Add comment** | **POST** | ❌ Each call inserts a new row |
+
+Creating something new isn't naturally idempotent. If the *same* POST reaches the server twice, two
+identical requests (or comments) are created.
+
+### Why this project can actually hit it
+
+Disabling the submit button while the request is pending only stops a **double click**. It doesn't stop
+**the same request arriving twice**, which happens when:
+
+- the network is slow, so the browser or a proxy gives up waiting and the user presses Submit again, but the
+  first request *did* reach the server and was saved;
+- a mobile connection drops and reconnects, and the request is resent;
+- a future client (mobile app, integration, script) retries automatically after a timeout, which is good
+  practice for clients and exactly what turns a timeout into a duplicate.
+
+Each duplicate feature request splits votes and discussion across two copies. An admin then has to merge
+them by hand, which is the very problem this product exists to solve. Duplicate comments are just noise.
+The brief's spirit, "repeated API requests must not accidentally create duplicate votes", applies equally
+to duplicate requests.
+
+### The design
+
+The client makes a random key **once per user action** (when the form is submitted, not per network
+attempt) and sends it with every attempt of that action:
+
+```
+POST /api/requests
+Idempotency-Key: 3b0f7c2e-8a1d-4d6e-9b5a-2f4c1e0a7d93
+{ "title": "Dark mode", "description": "…" }
+```
+
+New table:
+
+```sql
+CREATE TABLE idempotency_keys (
+  user_id       integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  key           text    NOT NULL,              -- the client's UUID
+  request_hash  text    NOT NULL,              -- SHA-256 of method + path + body
+  status_code   integer NOT NULL,
+  response_body jsonb   NOT NULL,
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, key)                   -- scoped per user: keys can't collide across users
+);
+```
+
+Server flow, **in the same transaction as the create**:
+
+1. `INSERT INTO idempotency_keys (user_id, key, request_hash, …) … ON CONFLICT DO NOTHING`.
+2. **Inserted (first time):** create the request as normal, store the response (status + body) on the key row,
+   commit, and return it.
+3. **Conflict (key seen before):**
+   - **Same `request_hash`:** return the **stored response** (same 201 and same request id). Nothing new is created.
+   - **Different `request_hash`:** the client reused a key for a different payload, which is a client bug.
+     Return **422** (Unprocessable Entity), never silently pick one.
+4. **Concurrent duplicates** (both attempts arrive at the same moment): the primary key makes the second
+   insert wait for the first transaction. After it commits, the second sees the row and replays the stored response.
+   This is the same "let the database's uniqueness decide" principle as votes.
+5. **Expiry:** keys older than 24 hours are deleted by a cleanup job. Retries happen within seconds or
+   minutes, so a day is generous.
+
+Client side (`RequestForm`, `CommentForm`): create the key with `crypto.randomUUID()` when the user
+submits, keep it while that submission is in flight or being retried, and make a new one for the next submission.
+
+**Optional:** if the header is missing, behave as today. That keeps curl and older clients working.
+
+### Alternatives considered
+
+| Option | Why not (alone) |
+| --- | --- |
+| Disable the button while pending (what we do now) | Only stops double clicks, not network-level repeats |
+| Dedupe by content ("same user, same title, last 60 s") | Guesses at intent: blocks genuine re-posts, misses near-duplicates, the window is arbitrary |
+| Unique constraint on `(author_id, title)` | Wrong rule: users may legitimately reuse a title later |
+| Client generates the request's ID (UUID primary key) | Also works, but needs UUID ids instead of our readable integers (`#34`), a bigger schema change |
+
+### Cost
+
+- One table and a cleanup job.
+- About 40 lines of shared helper code, usable by any POST route (`withIdempotency(user, key, hash, () => create())`).
+- A header on two client calls.
+- Stored responses take a little space, limited by the 24-hour expiry.
+
+**Interview line:** "Every write is idempotent except create, where it can't be by nature. The standard
+fix is an Idempotency-Key (Stripe's model): the client sends one key per user action, and the server stores
+the first response under that key and replays it for repeats. It's designed but deferred, because the button
+guard covers the common double-click case in a demo."

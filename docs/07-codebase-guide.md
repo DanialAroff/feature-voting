@@ -1,7 +1,7 @@
 # 07 — Codebase Guide
 
 How the code is organised, how a request flows through it, and what every file does.
-This guide covers everything up to and including editing your own request. Extend it as features land.
+This guide covers everything up to and including usage stats. Extend it as features land.
 
 ## 1. The layers
 
@@ -454,7 +454,43 @@ dropped, so `{ status: "released", authorId: 5, voteCount: 999 }` in the body is
 **Not added (yet):** locking edits once a request is Planned, and an "edited" marker. `updated_at` also changes on
 status changes and merges, so it can't tell an edit apart; that would need a separate `edited_at` column.
 
-## 16. Commands
+## 16. Usage stats
+
+**Files**
+
+| File | Role |
+| --- | --- |
+| `server/services/stats.ts` | `getUsageStats`: admin-only, every query in one consistent snapshot |
+| `app/api/stats/route.ts` | `GET /api/stats` → `UsageStats` JSON (401/403 for non-admins) |
+| `app/admin/stats/page.tsx` | Admin page: totals, last 7 days, by-status table, most-voted list |
+| `components/layout/site-header.tsx` | Admins get a "Stats" link |
+| `server/services/stats.int.test.ts` | Authorization, exact counts on a known dataset, empty system |
+
+**What's shown, and why each number:**
+
+| Stat | Answers |
+| --- | --- |
+| Totals (requests, votes, comments, users, duplicates merged) | How big and how active is the board? |
+| Last 7 days (new requests, votes, comments) | Is it alive *now*? |
+| Requests by status, with share | Where is the backlog? (Each status links to the filtered list) |
+| Most-voted (top 5) | What do users want most? |
+
+**Counting rules:**
+- **Merged duplicates are excluded** from request totals and the status table. They're tombstones, and
+  their votes and comments already moved to the target. They're reported separately as "duplicates merged".
+- **System comments (merge notes) aren't counted** as comments. They aren't user activity.
+- **"Last 7 days" counts everything submitted in the window**, including requests that were merged later.
+  That measures activity, not the current state.
+
+**One snapshot.** The service runs its 8 queries inside one `REPEATABLE READ`, read-only transaction. Postgres
+then answers every query as of the same moment. In the default isolation level each query sees the latest
+data, so a vote landing between "count votes" and "top requests" could make the page disagree with itself.
+`read only` also guarantees this code can never write.
+
+**Cost and scaling.** Every page load runs 8 count queries. That's fine at this size. At scale you'd cache
+the result for a minute (`use cache` with a short `cacheLife`), or keep running counters.
+
+## 17. Commands
 
 | Command | Does |
 | --- | --- |
