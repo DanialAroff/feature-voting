@@ -13,6 +13,8 @@
     "test:watch": "vitest",
     "test:unit": "vitest run --project unit",
     "test:int": "vitest run --project integration",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
     "db:up": "docker compose up -d db",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
@@ -31,6 +33,7 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.0",
     "@tailwindcss/turbopack": "^4",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/jest-dom": "^7.0.1",

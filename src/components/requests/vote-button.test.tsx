@@ -83,6 +83,34 @@ describe("VoteButton", () => {
     expect(button()).toHaveAttribute("aria-pressed", "false");
   });
 
+  test("rapid clicks send one request at a time and end on the last intent", async () => {
+    // Parallel PUT + DELETE can reach the server in either order (found by the
+    // e2e double-click test), so the second request waits for the first.
+    const pending: ((res: Response) => void)[] = [];
+    const fetchMock = vi.fn(() => new Promise<Response>((r) => pending.push(r)));
+    vi.stubGlobal("fetch", fetchMock);
+    renderButton();
+
+    fireEvent.click(button()); // vote
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    fireEvent.click(button()); // unvote while the PUT is in flight
+    fireEvent.click(button()); // vote again
+    fireEvent.click(button()); // ...and unvote: the last intent is "not voted"
+    expect(button()).toHaveAttribute("aria-pressed", "false");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => pending[0](Response.json({ voted: true, voteCount: 4 })));
+    // The server now disagrees with the intent, so exactly one follow-up goes out.
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/requests/7/vote", expect.objectContaining({ method: "DELETE" }));
+    expect(button()).toHaveAttribute("aria-pressed", "false");
+
+    await act(async () => pending[1](Response.json({ voted: false, voteCount: 3 })));
+    expect(button()).toHaveAttribute("aria-pressed", "false");
+    expect(button()).toHaveTextContent("3");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   test("follows a merged request to its target", async () => {
     const { respond } = deferredFetch();
     renderButton();

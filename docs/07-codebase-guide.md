@@ -213,6 +213,26 @@ Deferred: rate limiting on login, sliding session renewal, expired-session clean
   ```
   `loginAs("admin")` creates a user plus a session and gives you the `cookie` string to send.
 
+**End-to-end (`npm run test:e2e`, Playwright, `e2e/`).** A real browser clicks through a real server.
+- **Server:** `playwright.config.ts` runs `next build && next start --port 3100`, a production build as the
+  Next.js testing guide recommends. It can run while `next dev` is on :3000, since dev builds into `.next/dev`.
+- **Database:** `e2e/global-setup.ts` creates `feature_voting_e2e` if missing, migrates it and runs
+  `scripts/seed.ts` against it, so the demo accounts exist. It refuses if the URL equals `DATABASE_URL`
+  or `TEST_DATABASE_URL`, because the seed truncates everything.
+- **Independence:** each test creates its own requests or users with `unique()` titles, so tests run in
+  parallel and in any order. Seeded rows are only read, never changed.
+- **Setup goes through the API, behaviour through the UI:**
+  ```ts
+  await loginAs(page, ALICE);                 // POST /api/auth/login, cookie lands in the browser
+  const request = await createRequest(page);  // POST /api/requests
+  await page.goto(`/requests/${request.id}`); // ...then click like a user
+  ```
+- **Selectors are roles and labels** (`getByRole("button", { name: "Vote for this request (1 vote)" })`),
+  the same names a screen reader announces. Two gotchas: Next.js renders an empty `role="alert"` route
+  announcer, so scope alerts with `getByRole("main")`; and the comment count appears both in the header
+  and in the thread heading.
+- **On failure:** a screenshot and trace go to `test-results/`; open one with `npx playwright show-trace <zip>`.
+
 ## 9. Recipe: adding a new endpoint (you'll see this pattern from step 6 on)
 
 1. **Schema.** Add a Zod schema in `src/lib/validation/<feature>.ts` (shared with the form).
@@ -283,7 +303,7 @@ Deferred: rate limiting on login, sliding session renewal, expired-session clean
 | `app/api/requests/[id]/vote/route.ts` | `PUT` and `DELETE` → `{ voted, voteCount }` |
 | `components/requests/vote-button.tsx` | Optimistic toggle used in the list and on the detail page |
 | `server/services/votes.int.test.ts` | Idempotency and concurrency tests against real Postgres |
-| `components/requests/vote-button.test.tsx` | Optimistic update, rollback, DELETE, merged redirect, logged-out link |
+| `components/requests/vote-button.test.tsx` | Optimistic update, rollback, DELETE, merged redirect, logged-out link, rapid clicks serialised |
 
 **One vote, step by step** (`castVote`, all in one transaction):
 1. `SELECT … FROM requests WHERE id = $1 FOR UPDATE` locks the request row:
@@ -304,13 +324,23 @@ and the count updated as read, then `+ 1` in app code. The concurrency test then
 `{ stored: 25, actual: 25 }`. Every vote test checks that `vote_count` equals `COUNT(*)` of the vote rows.
 
 **Optimistic UI** (`VoteButton`):
-- **On click:** the button flips instantly (`onMutate`), sending the *desired* state (PUT or DELETE).
+- **On click:** the button flips instantly (`toggle()`) and records the *desired* state in a ref. Requests
+  send that desired state (PUT or DELETE).
 - **On success:** shows the server's `{ voted, voteCount }`, which includes other people's votes.
 - **On error:** rolls back to the last state the server confirmed and shows an inline `role="alert"` message.
   A 409 for a merged request navigates to the target instead.
-- **Rapid clicks:** each click gets a sequence number, and only the latest response updates the UI, so a
-  slow older response can't overwrite a newer click. PUT and DELETE are idempotent, so the server
-  ends up in the state of the last click.
+- **Rapid clicks: one request at a time.** While a request is in flight, further clicks only change the
+  desired state. When the reply arrives, the loop in `mutationFn` sends another request only if the
+  desired state still differs from what the server confirmed. Four quick clicks cost at most 2 requests.
+  - *Why not send in parallel and keep the latest response?* That was the first version. Idempotency
+    makes a *repeated* request safe, but it says nothing about *order*: a PUT and a DELETE sent
+    together travel on separate connections and can be applied in either order, so the server could
+    end up "voted" while the UI showed "not voted". Only the client knows the click order, so the
+    client must serialise. Found while writing the e2e suite; the unit test "rapid clicks send one
+    request at a time" fails against the old version.
+  - `inFlight` is a ref, not `mutation.isPending`: two clicks can arrive before React re-renders.
+- **`aria-busy`** is true until the server has confirmed the last click. Assistive tech uses it, and the
+  e2e tests wait for it before reloading.
 - **`key={voteCount-hasVoted}`** re-seeds the local state when the server sends fresh numbers.
 - **Accessibility:** `aria-pressed` gives the on/off state, and `aria-label` says "Remove your vote (4 votes)".
 - **Logged out:** the button is a link to `/login?next=<this page>`.
@@ -499,5 +529,7 @@ the result for a minute (`use cache` with a short `cacheLife`), or keep running 
 | `npm run db:seed` | Reset the dev DB to demo data (`admin@example.com` / `password123`) |
 | `npm run dev` | Dev server at http://localhost:3000 |
 | `npm test` | Unit + integration tests |
+| `npm run test:e2e` | Playwright e2e: builds, serves on :3100, own DB (first time: `npx playwright install chromium`) |
+| `npm run test:e2e:ui` | Same, in Playwright's interactive UI: watch each step, time-travel through the DOM |
 | `npm run typecheck` / `npm run lint` / `npm run build` | Static checks / production build |
 | `npm run db:studio` | Browse tables in the browser |

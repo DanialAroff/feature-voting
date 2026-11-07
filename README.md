@@ -8,7 +8,7 @@ with visible integrity guarantees, not every feature half-done. Scope is stated 
 [below](#scope).
 
 **Stack:** Next.js 16 (App Router, TypeScript) · PostgreSQL 17 · Drizzle ORM · Zod · TanStack Query ·
-Tailwind · Vitest · Docker Compose
+Tailwind · Vitest · Playwright · Docker Compose
 
 ---
 
@@ -57,10 +57,13 @@ You can also register a new account at `/register`. Self-registration always cre
 npm test              # everything (Postgres must be running: npm run db:up)
 npm run test:unit     # pure logic + React components (jsdom), no database
 npm run test:int      # integration tests against the real feature_voting_test database
+npm run test:e2e      # Playwright: builds the app, serves it on :3100 and drives Chromium
 npm run typecheck && npm run lint && npm run build
 ```
 
-- **92 tests**, focused on the business rules and how they fail, not on coverage numbers.
+First e2e run only: `npx playwright install chromium`.
+
+- **93 Vitest tests + 15 Playwright tests**, focused on the business rules and how they fail, not on coverage numbers.
 - **Integration tests run against a real Postgres.** The test database is separate, migrated once per
   run, and truncated before each test.
 - **No HTTP server needed.** Route handlers are called directly with a constructed `NextRequest`,
@@ -78,7 +81,20 @@ npm run typecheck && npm run lint && npm run build
 | Requests | Server-side validation; author auto-vote in the same transaction; status/author can't be injected; search (wildcards escaped), filter, sort with stable tiebreak, paging; merged duplicates hidden |
 | Stats | Admin only (401/403, incl. direct service call); merged duplicates and merge notes excluded; 7-day window; top ordering; empty system returns zeros |
 | Editing | Author edits own (200); another user → 403 with nothing changed; anonymous → 401; admin can moderate; partial updates; status/author/counts not editable through the body; 400 / 404 / 409 (merged) |
-| UI | Vote button: optimistic update, rollback with alert, DELETE on unvote, merged redirect, logged-out login link |
+| UI | Vote button: optimistic update, rollback with alert, DELETE on unvote, merged redirect, logged-out login link, rapid clicks send one request at a time and end on the last click |
+| End to end (Playwright) | Register / log out / log in; wrong password; protected page → login → back; stats admin-only; browse + status filter logged out; submit → own vote → found by search; field errors; vote/unvote survives reload; rapid clicks agree with the server; comment + pinned official response; admin status change + timeline; merge combines voters and redirects the old link; edit own vs someone else's |
+
+**E2E tests have their own database.** `feature_voting_e2e` is created if missing, migrated and re-seeded on
+every run, and setup refuses to run against `DATABASE_URL` or `TEST_DATABASE_URL`. They run against a
+production build (`next build && next start`), not the dev server. Each test creates its own requests
+or users, so tests don't depend on each other and run in parallel.
+
+**The e2e suite led to a real fix.** The vote button used to send a PUT and a DELETE in parallel on a
+quick vote-then-unvote. The server applies them in arrival order, which isn't always the order they
+were sent, so the vote could end opposite to the last click while the UI showed the click. Now one
+request is in flight at a time, and a follow-up is sent only if the latest intent still differs from
+what the server confirmed. The unit test for it fails against the old component (4 parallel requests
+instead of 2 in sequence).
 
 **The concurrency tests have been checked against broken code.** I deliberately broke the vote
 service the classic way: no row lock, and the count updated as read, then +1 in app code. The
@@ -107,7 +123,8 @@ service the classic way: no row lock, and the count updated as read, then +1 in 
 | Merge duplicates | ✅ Complete | Admin merge with preview and confirm; votes deduped, comments moved, duplicate's wording kept; tombstone redirects. Design: [D6](docs/05-decisions.md) |
 | Edit own request | ✅ Complete | Title and description; author or admin only; Edit link shown only to them |
 | Usage statistics | ✅ Complete | Admin page `/admin/stats`: totals, last 7 days, requests by status, most-voted; one consistent DB snapshot |
-| Rate limiting, idempotency keys on create, real-time updates, notifications, caching, E2E tests, CI | ❌ Deferred | See [next steps](#next-steps) |
+| E2E tests | ✅ Complete | Playwright, 15 user journeys against a production build and its own database |
+| Rate limiting, idempotency keys on create, real-time updates, notifications, caching, CI | ❌ Deferred | See [next steps](#next-steps) |
 
 ---
 
@@ -225,8 +242,8 @@ More detail: [database design](docs/06-database-design.md) · [codebase guide](d
    - a session cleanup job
    - an audit log for admin actions
 3. **Delivery:**
-   - CI (typecheck, lint, unit and integration tests against a Postgres service)
-   - Playwright E2E for the vote and status flows
+   - CI (typecheck, lint, unit, integration and e2e tests against a Postgres service)
+   - e2e in Firefox and WebKit, plus mobile viewports
    - an OpenAPI spec generated from the Zod schemas
 4. **Scale, when needed:**
    - `pg_trgm` or a tsvector search index
@@ -249,6 +266,7 @@ src/components/     UI components (ui/, auth/, requests/, layout/)
 src/lib/            shared by browser and server: validation schemas, API client, constants
 src/server/         server only: db/, auth/, http/ (error envelope, route wrapper), services/
 src/test/           integration test setup and helpers
+e2e/                Playwright specs, global setup (e2e database) and helpers
 drizzle/            generated SQL migrations
 scripts/seed.ts     demo data
 docs/               requirements, priorities, decisions, DB design, codebase guide
@@ -256,12 +274,14 @@ docs/               requirements, priorities, decisions, DB design, codebase gui
 
 ## Time spent
 
-About **4 h 15 min of active building time**:
+About **4 h 30 min of active building time**:
 
 | Session | Work | Time |
 | --- | --- | --- |
 | 4 Nov (into the early hours of 5 Nov), several sittings | Planning docs, scaffold, schema, auth, requests, voting, status, README, comments, merge | ≈ 4 h (estimated from commit and file timestamps) |
 | 5 Nov, 07:03–07:10 | Edit own request | 7 min |
 | 6 Nov, 07:56–08:04 | Usage stats | 8 min |
+| 7 Nov, 09:25–09:38 | Playwright e2e suite (15 tests) and the vote-button ordering fix it led to | 13 min |
+| 7 Nov, 09:25–09:38 | Playwright e2e suite (15 tests) and the vote-button ordering fix it led to | 13 min |
 
 Separate study sessions spent going through the design decisions aren't counted. That includes the planning and design docs in `docs/`.

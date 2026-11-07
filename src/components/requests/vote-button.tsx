@@ -16,38 +16,63 @@ type Props = {
 };
 
 // Optimistic toggle: the UI flips immediately, then settles on what the server
-// says. Each click sends the *desired* state (PUT or DELETE), so quick repeated
-// clicks are safe, and only the latest response is applied so an older reply
-// arriving late can't overwrite a newer click.
+// says. Each request sends the *desired* state (PUT or DELETE), so retries are
+// safe. Requests go out one at a time: parallel ones could reach the server in
+// a different order than they were sent, leaving the vote opposite to the last
+// click. While one is in flight, further clicks only update the intent; when it
+// returns, another request is sent if the intent no longer matches the server.
 export function VoteButton({ requestId, initial, canVote, size = "sm" }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const [state, setState] = useState(initial);
   const [error, setError] = useState<string | null>(null);
-  const latest = useRef(0);
+  const [syncing, setSyncing] = useState(false); // exposed as aria-busy
   const confirmed = useRef(initial); // last state the server agreed to
+  const desired = useRef(initial.voted); // the user's latest intent
+  // A ref, not mutation.isPending: two clicks can land before React re-renders.
+  const inFlight = useRef(false);
 
   const mutation = useMutation({
-    mutationFn: ({ voted }: { voted: boolean; seq: number }) =>
-      api<VoteState>(`/api/requests/${requestId}/vote`, voted ? "PUT" : "DELETE"),
-    onMutate: ({ voted }) => {
-      setError(null);
-      setState((s) => ({ voted, voteCount: s.voteCount + (voted ? 1 : -1) }));
+    mutationFn: async () => {
+      try {
+        while (desired.current !== confirmed.current.voted) {
+          const voted = desired.current;
+          confirmed.current = await api<VoteState>(`/api/requests/${requestId}/vote`, voted ? "PUT" : "DELETE");
+        }
+        return confirmed.current;
+      } finally {
+        // Cleared in the same tick as the final check, so a click can't slip between them unsent.
+        inFlight.current = false;
+      }
     },
-    onSuccess: (server, { seq }) => {
-      confirmed.current = server;
-      if (seq === latest.current) setState(server);
+    onSuccess: (server) => {
+      if (inFlight.current) return; // a newer click's run will settle instead
+      setState(server);
+      setSyncing(false);
     },
-    onError: (err, { seq }) => {
+    onError: (err) => {
       if (err instanceof ApiError && err.details.mergedIntoId) {
         router.push(`/requests/${err.details.mergedIntoId}`);
         return;
       }
-      if (seq !== latest.current) return;
+      if (inFlight.current) return;
+      desired.current = confirmed.current.voted;
       setState(confirmed.current); // roll back to what the server last confirmed
+      setSyncing(false);
       setError(err instanceof ApiError && err.status === 401 ? "Please log in again to vote." : "Couldn't save your vote. Try again.");
     },
   });
+
+  function toggle() {
+    const voted = !desired.current;
+    desired.current = voted;
+    setError(null);
+    setState((s) => ({ voted, voteCount: s.voteCount + (voted ? 1 : -1) }));
+    if (inFlight.current) return; // the running loop picks up the new intent
+    inFlight.current = true;
+    setSyncing(true);
+    mutation.mutate();
+  }
 
   const sizes = size === "lg" ? "h-16 w-16 text-lg" : "h-14 w-14";
   const label = `${state.voted ? "Remove your vote" : "Vote for this request"} (${state.voteCount} ${state.voteCount === 1 ? "vote" : "votes"})`;
@@ -80,12 +105,10 @@ export function VoteButton({ requestId, initial, canVote, size = "sm" }: Props) 
       <button
         type="button"
         aria-pressed={state.voted}
+        aria-busy={syncing}
         aria-label={label}
         title={label}
-        onClick={() => {
-          latest.current += 1;
-          mutation.mutate({ voted: !state.voted, seq: latest.current });
-        }}
+        onClick={toggle}
         className={`${base} ${
           state.voted
             ? "border-blue-700 bg-blue-700 text-white hover:bg-blue-800"
